@@ -26,7 +26,6 @@
 static uint32_t last_mouse_move_time_ms = 0;
 
 // Declarations
-static void trigger_event_on_gamepad(uni_hid_device_t *d);
 SwitchOutReport report[CONFIG_BLUEPAD32_MAX_DEVICES];
 SwitchIdxOutReport idx_r;
 uint8_t connected_controllers;
@@ -160,8 +159,8 @@ static void pico_switch_platform_on_init_complete(void) {
 
     // Safe to call "unsafe" functions since they are called from BT thread
 
-    // Start scanning
-    uni_bt_enable_new_connections_unsafe(true);
+    // Start scanning and auto-connect to discovered keyboards/mice
+    uni_bt_start_scanning_and_autoconnect_unsafe();
 
     // Based on runtime condition you can delete or list the stored BT keys.
     if (1)
@@ -251,29 +250,6 @@ static void pico_switch_platform_on_oob_event(uni_platform_oob_event_t event, vo
 	ARG_UNUSED(event);
 	ARG_UNUSED(data);
 	return;
-}
-
-//
-// Helpers - UNUSED
-//
-static void trigger_event_on_gamepad(uni_hid_device_t* d) {
-    if (d->report_parser.set_player_leds != NULL) {
-        static uint8_t led = 0;
-        led += 1;
-        led &= 0xf;
-        d->report_parser.set_player_leds(d, led);
-    }
-
-    if (d->report_parser.set_lightbar_color != NULL) {
-        static uint8_t red = 0x10;
-        static uint8_t green = 0x20;
-        static uint8_t blue = 0x40;
-
-        red += 0x10;
-        green -= 0x20;
-        blue += 0x40;
-        d->report_parser.set_lightbar_color(d, red, green, blue);
-    }
 }
 
 //

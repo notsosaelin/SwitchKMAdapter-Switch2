@@ -1,6 +1,6 @@
 # SwitchKMAdapter (Pico 2 W)
 
-Turn a **Raspberry Pi Pico 2 W** into a Bluetooth **keyboard + mouse adapter** for the Nintendo
+Turn a **Raspberry Pi Pico 2 W** (or the original **Pico W**) into a Bluetooth **keyboard + mouse adapter** for the Nintendo
 **Switch, Switch 2, and Switch Lite**. It emulates a wired controller (a licensed HORIPAD-style HID
 gamepad), so the console accepts it with no extra setup, while you play with a Bluetooth keyboard and
 mouse. Every key, button, and the mouse can be remapped — live, from a browser — with no reflashing.
@@ -17,10 +17,11 @@ mouse. Every key, button, and the mouse can be remapped — live, from a browser
 - **Mouse aim** on a stick, with adjustable sensitivity
 - Config **saved to flash** (survives power-off)
 - **Web Serial config tool** — edit the mapping in Chrome/Edge, no reflashing
+- Builds for both the **Pico 2 W (RP2350)** and the original **Pico W (RP2040)**
 
 ## Install (run the firmware)
 
-1. Get `SwitchKMAdapter.uf2` — from Releases if available, or build it (see below).
+1. Get `SwitchKMAdapter.uf2` **for your board** (Pico 2 W or Pico W) — from Releases if available, or build it (see below).
 2. Hold **BOOTSEL**, plug the Pico 2 W into your PC; it mounts as a drive.
 3. Copy `SwitchKMAdapter.uf2` onto that drive. It reboots into controller mode.
 4. Plug the Pico 2 W into the Switch (dock USB port, USB-C hub, etc.).

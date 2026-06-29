@@ -5,10 +5,6 @@ Turn a **Raspberry Pi Pico 2 W** (or the original **Pico W**) into a Bluetooth *
 gamepad), so the console accepts it with no extra setup, while you play with a Bluetooth keyboard and
 mouse. Every key, button, and the mouse can be remapped — live, from a browser — with no reflashing.
 
-> Fork of [notsosaelin/SwitchKMAdapter-Switch2](https://github.com/notsosaelin/SwitchKMAdapter-Switch2),
-> **ported from the original Pico W (RP2040) to the Pico 2 W (RP2350)** and extended with a
-> flash-persisted, fully remappable config plus a Web Serial configuration tool.
-
 ## Features
 
 - Wired controller HID accepted by **Switch / Switch 2 / Switch Lite** (no authentication setup)

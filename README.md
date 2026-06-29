@@ -94,7 +94,6 @@ needed.
 
 ## Acknowledgements
 
-- Forked from [SwitchKMAdapter-Switch2](https://github.com/notsosaelin/SwitchKMAdapter-Switch2)
 - Based on [PicoSwitch-WirelessGamepadAdapter](https://github.com/juan518munoz/PicoSwitch-WirelessGamepadAdapter) by juan518munoz
 - [Bluepad32] by ricardoquesada
 - [TinyUSB] by hathach

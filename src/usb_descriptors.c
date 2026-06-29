@@ -26,43 +26,91 @@
 
 #include "tusb.h"
 #include "SwitchDescriptors.h"
+#include "usb_mode.h"
 
-/* A combination of interfaces must have a unique product id, since PC will save
- * device driver after the first plug. Same VID/PID with different interface e.g
- * MSC (first), then CDC (later) will possibly cause system error on PC.
- *
- * Auto ProductID layout's Bitmap:
- *   [MSB]         HID | MSC | CDC          [LSB]
+/* The device presents one of two personalities depending on g_usb_mode:
+ *   - USB_MODE_CONTROLLER: the HORIPAD HID gamepad the console expects.
+ *   - USB_MODE_CONFIG:     a USB CDC serial port for the Web Serial config tool.
+ * The controller-mode descriptors are returned byte-for-byte unchanged so the
+ * console-validated behavior is never affected.
  */
+
 #define _PID_MAP(itf, n) ((CFG_TUD_##itf) << (n))
 
 //--------------------------------------------------------------------+
-// Device Descriptors
+// Config-mode (CDC) descriptors
 //--------------------------------------------------------------------+
 
-// Invoked when received GET DEVICE DESCRIPTOR
-// Application return pointer to descriptor
+// Distinct VID/PID so the web tool can filter for this device.
+#define CONFIG_USB_VID 0xCAFE
+#define CONFIG_USB_PID 0x4011
+
+static const tusb_desc_device_t desc_device_cdc = {
+	.bLength = sizeof(tusb_desc_device_t),
+	.bDescriptorType = TUSB_DESC_DEVICE,
+	.bcdUSB = 0x0200,
+	.bDeviceClass = TUSB_CLASS_MISC,
+	.bDeviceSubClass = MISC_SUBCLASS_COMMON,
+	.bDeviceProtocol = MISC_PROTOCOL_IAD,
+	.bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
+	.idVendor = CONFIG_USB_VID,
+	.idProduct = CONFIG_USB_PID,
+	.bcdDevice = 0x0100,
+	.iManufacturer = 0x01,
+	.iProduct = 0x02,
+	.iSerialNumber = 0x03,
+	.bNumConfigurations = 0x01,
+};
+
+enum { ITF_NUM_CDC = 0, ITF_NUM_CDC_DATA, ITF_NUM_CDC_TOTAL };
+
+#define CONFIG_TOTAL_LEN_CDC (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN)
+
+#define EPNUM_CDC_NOTIF 0x81
+#define EPNUM_CDC_OUT 0x02
+#define EPNUM_CDC_IN 0x82
+
+static const uint8_t desc_configuration_cdc[] = {
+	TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_CDC_TOTAL, 0, CONFIG_TOTAL_LEN_CDC, 0x00, 100),
+	TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 0, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
+};
+
+static const uint8_t config_string_manufacturer[] = "SwitchKMAdapter";
+static const uint8_t config_string_product[] = "SwitchKMAdapter Config";
+static const uint8_t config_string_serial[] = "000001";
+
+static const uint8_t *config_string_descriptors[] = {
+	switch_string_language,
+	config_string_manufacturer,
+	config_string_product,
+	config_string_serial,
+};
+
+//--------------------------------------------------------------------+
+// Device Descriptor
+//--------------------------------------------------------------------+
+
 uint8_t const *
 tud_descriptor_device_cb(void)
 {
+	if (g_usb_mode == USB_MODE_CONFIG)
+		return (uint8_t const *) &desc_device_cdc;
 	return switch_device_descriptor;
 }
 
 //--------------------------------------------------------------------+
-// HID Report Descriptor
+// HID Report Descriptor (controller mode only)
 //--------------------------------------------------------------------+
 
-// Invoked when received GET HID REPORT DESCRIPTOR
-// Application return pointer to descriptor
-// Descriptor contents must exist long enough for transfer to complete
 uint8_t const *
 tud_hid_descriptor_report_cb(uint8_t instance)
 {
+	(void) instance;
 	return switch_report_descriptor;
 }
 
 //--------------------------------------------------------------------+
-// Configuration Descriptor
+// Configuration Descriptor (controller mode)
 //--------------------------------------------------------------------+
 
 enum { ITF_NUM_HID1, ITF_NUM_HID2, ITF_NUM_HID3, ITF_NUM_HID4, ITF_NUM_TOTAL };
@@ -117,12 +165,12 @@ uint8_t const desc_configuration[] = {
 };
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
-// Application return pointer to descriptor
-// Descriptor contents must exist long enough for transfer to complete
 uint8_t const *
 tud_descriptor_configuration_cb(uint8_t index)
 {
-	// return switch_configuration_descriptor;
+	(void) index;
+	if (g_usb_mode == USB_MODE_CONFIG)
+		return desc_configuration_cdc;
 	return desc_configuration;
 }
 
@@ -132,27 +180,33 @@ tud_descriptor_configuration_cb(uint8_t index)
 
 static uint16_t _desc_str[32];
 
-// Invoked when received GET STRING DESCRIPTOR request
-// Application return pointer to descriptor, whose contents must exist long enough for transfer to complete
 uint16_t const *
 tud_descriptor_string_cb(uint8_t index, uint16_t langid)
 {
 	(void) langid;
 
+	const uint8_t **descs;
+	uint8_t desc_count;
+	if (g_usb_mode == USB_MODE_CONFIG) {
+		descs = config_string_descriptors;
+		desc_count = sizeof(config_string_descriptors) /
+		             sizeof(config_string_descriptors[0]);
+	} else {
+		descs = switch_string_descriptors;
+		desc_count = sizeof(switch_string_descriptors) /
+		             sizeof(switch_string_descriptors[0]);
+	}
+
 	uint8_t chr_count;
 
 	if (index == 0) {
-		memcpy(&_desc_str[1], switch_string_descriptors[0], 2);
+		memcpy(&_desc_str[1], descs[0], 2);
 		chr_count = 1;
 	} else {
-		// Note: the 0xEE index string is a Microsoft OS 1.0 Descriptors.
-		// https://docs.microsoft.com/en-us/windows-hardware/drivers/usbcon/microsoft-defined-usb-descriptors
-
-		if (!(index < sizeof(switch_string_descriptors) /
-		                      sizeof(switch_string_descriptors[0])))
+		if (index >= desc_count)
 			return NULL;
 
-		const char *str = switch_string_descriptors[index];
+		const char *str = (const char *) descs[index];
 
 		// Cap at max char
 		chr_count = strlen(str);
@@ -166,14 +220,15 @@ tud_descriptor_string_cb(uint8_t index, uint16_t langid)
 	}
 
 	// first byte is length (including header), second byte is string type
-	_desc_str[0] = (TUSB_DESC_STRING << 8) | (2 * chr_count + 2);
+	_desc_str[0] = (uint16_t)((TUSB_DESC_STRING << 8) | (2 * chr_count + 2));
 
 	return _desc_str;
 }
 
-// Invoked when received GET_REPORT control request
-// Application must fill buffer report's content and return its length.
-// Return zero will cause the stack to STALL request
+//--------------------------------------------------------------------+
+// HID callbacks (controller mode)
+//--------------------------------------------------------------------+
+
 uint16_t
 tud_hid_get_report_cb(uint8_t instance,
                       uint8_t report_id,
@@ -184,8 +239,6 @@ tud_hid_get_report_cb(uint8_t instance,
 	return 0;
 }
 
-// Invoked when received SET_REPORT control request or
-// received data on OUT endpoint ( Report ID = 0, Type = 0 )
 void
 tud_hid_set_report_cb(uint8_t itf,
                       uint8_t report_id,

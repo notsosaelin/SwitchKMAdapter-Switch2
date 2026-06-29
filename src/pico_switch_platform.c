@@ -14,16 +14,15 @@
 #include "report.h"
 #include "SwitchDescriptors.h"
 #include "KeyboardKeys.h"
+#include "config.h"
 
 // Sanity check
 #ifndef CONFIG_BLUEPAD32_PLATFORM_CUSTOM
 #error "Pico W must use BLUEPAD32_PLATFORM_CUSTOM"
 #endif
 
-#define AXIS_DEADZONE 0xa
 #define JOYSTICK_CENTER 0x80
-#define MOUSE_SENSITIVITY 5
-#define MOUSE_IDLE_TIMEOUT_MS 40
+
 static uint32_t last_mouse_move_time_ms = 0;
 
 // Declarations
@@ -53,381 +52,63 @@ empty_gamepad_report(SwitchOutReport *gamepad)
 	gamepad->ry = SWITCH_JOYSTICK_MID;
 }
 
-uint8_t
-convert_to_switch_axis(int32_t bluepadAxis)
-{
-	// bluepad32 reports from -512 to 511 as int32_t
-	// switch reports from 0 to 255 as uint8_t
-
-	bluepadAxis += 513;  // now max possible is 1024
-	bluepadAxis /= 4;    // now max possible is 255
-
-	if (bluepadAxis < SWITCH_JOYSTICK_MIN)
-		bluepadAxis = 0;
-	else if ((bluepadAxis > (SWITCH_JOYSTICK_MID - AXIS_DEADZONE)) &&
-	         (bluepadAxis < (SWITCH_JOYSTICK_MID + AXIS_DEADZONE))) {
-		bluepadAxis = SWITCH_JOYSTICK_MID;
-	} else if (bluepadAxis > SWITCH_JOYSTICK_MAX)
-		bluepadAxis = SWITCH_JOYSTICK_MAX;
-
-	return (uint8_t) bluepadAxis;
-}
-
 // Clamp between 0 and 255
-static uint8_t clamp_stick_value(int val) 
+static uint8_t clamp_stick_value(int val)
 {
-    if (val < 0) return 0;
-    if (val > 255) return 255;
-    return (uint8_t)val;
+	if (val < 0) return 0;
+	if (val > 255) return 255;
+	return (uint8_t)val;
 }
 
-static void fill_gamepad_report_from_keyboard(int idx, const uni_keyboard_t* gp) 
+// Map a keyboard report onto the Switch report using the active bindings.
+static void fill_gamepad_report_from_keyboard(int idx, const uni_keyboard_t* kb)
 {
-    
-	if ((gp->modifiers & UNI_KEYBOARD_MODIFIER_LEFT_SHIFT)) {
-        report[idx].buttons |= SWITCH_MASK_L3;
-    }
-
-	if ((gp->modifiers & UNI_KEYBOARD_MODIFIER_LEFT_CONTROL)) {
-        report[idx].buttons |= SWITCH_MASK_R3;
-    }
-
-    for (int i = 0; i < UNI_KEYBOARD_PRESSED_KEYS_MAX; i++) {
-        uint8_t key = gp->pressed_keys[i];
-        switch (key) {
-
-			// A Button
-            case KEY_Q:
-                report[idx].buttons |= SWITCH_MASK_A;
-                break;
-
-			// B Button
-			case KEY_SPACE:
-                report[idx].buttons |= SWITCH_MASK_B;
-                break;
-
-			// X Button
-            case KEY_R:
-                report[idx].buttons |= SWITCH_MASK_X;
-                break;
-
-			// Y Button
-			case KEY_E:
-				report[idx].buttons |= SWITCH_MASK_Y;
-                break;
-			
-			// Dpad Down
-            case KEY_B:
-                report[idx].hat = SWITCH_HAT_DOWN;
-                break;
-
-			//Dpad Up
-			case KEY_F:
-                report[idx].hat = SWITCH_HAT_UP;
-                break;
-			
-			//Dpad Right
-			case KEY_I:
-                report[idx].hat = SWITCH_HAT_RIGHT;
-                break;
-
-			//Minus Button
-			case KEY_TAB:
-                report[idx].buttons |= SWITCH_MASK_MINUS;
-                break;
-			
-			//Plus Button
-			case KEY_ESC:
-                report[idx].buttons |= SWITCH_MASK_PLUS;
-                break;
-			
-			//Home Button
-			case KEY_H:
-                report[idx].buttons |= SWITCH_MASK_HOME;
-                break;
-			
-			//Capture Button
-			case KEY_C:
-                report[idx].buttons |= SWITCH_MASK_CAPTURE;
-                break;
-
-			//Left Joystick movement
-            case KEY_W:
-                report[idx].ly = 0x00; // up
-                break;
-
-            case KEY_S:
-                report[idx].ly = 0xFF; // down
-                break;
-
-            case KEY_A:
-                report[idx].lx = 0x00; // left
-                break;
-
-            case KEY_D:
-                report[idx].lx = 0xFF; // right
-                break;
-
-            default:
-                break;
-        }
-    }
-}
-
-static void fill_gamepad_report_from_mouse(int idx, const uni_mouse_t* mouse) 
-{   
-	absolute_time_t now = get_absolute_time();
-    uint32_t now_ms = to_ms_since_boot(now);
-
-	//right click
-    if (mouse->buttons & MOUSE_BUTTON_RIGHT) 
-	{
-        report[idx].buttons |= SWITCH_MASK_ZL;
-	} 
-	else 
-	{
-		report[idx].buttons &= ~SWITCH_MASK_ZL; 
-    }
-
-	//left click
-    if (mouse->buttons & MOUSE_BUTTON_LEFT) 
-	{
-        report[idx].buttons |= SWITCH_MASK_ZR;
-    } 
-	else 
-	{
-		report[idx].buttons &= ~SWITCH_MASK_ZR; 
+	// Modifier keys (Left/Right Ctrl, Shift, Alt, GUI) live in bits 0..7.
+	for (int b = 0; b < 8; b++) {
+		if (kb->modifiers & (1u << b))
+			config_apply_action(&report[idx], g_config.modifier_action[b]);
 	}
 
-	//middle click
-	if (mouse->buttons & MOUSE_BUTTON_MIDDLE) 
-	{
-        report[idx].hat = SWITCH_HAT_LEFT;
-    }
+	// Regular keys: the HID usage code indexes the keymap directly.
+	for (int i = 0; i < UNI_KEYBOARD_PRESSED_KEYS_MAX; i++) {
+		uint8_t key = kb->pressed_keys[i];
+		if (key != 0)
+			config_apply_action(&report[idx], g_config.key_action[key]);
+	}
+}
 
-	//scroll wheel
-    if (mouse->scroll_wheel > 0) //up
-	{
-		report[idx].buttons |= SWITCH_MASK_L;
+// Map a mouse report onto the Switch report using the active bindings.
+static void fill_gamepad_report_from_mouse(int idx, const uni_mouse_t* mouse)
+{
+	uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+
+	// Mouse buttons (left/right/middle/aux) live in bits 0..7.
+	for (int b = 0; b < 8; b++) {
+		if (mouse->buttons & (1u << b))
+			config_apply_action(&report[idx], g_config.mouse_button_action[b]);
+	}
+
+	// Scroll wheel. Consume the delta so one notch fires exactly once.
+	if (mouse->scroll_wheel > 0) {
+		config_apply_action(&report[idx], g_config.scroll_up_action);
+		((uni_mouse_t*)mouse)->scroll_wheel = 0;
+	} else if (mouse->scroll_wheel < 0) {
+		config_apply_action(&report[idx], g_config.scroll_down_action);
 		((uni_mouse_t*)mouse)->scroll_wheel = 0;
 	}
 
-	if (mouse->scroll_wheel < 0) //down
-	{
-		report[idx].buttons |= SWITCH_MASK_R;
-		((uni_mouse_t*)mouse)->scroll_wheel = 0;
+	// Mouse motion drives the configured analog stick (default: right / aim).
+	uint8_t *stick_x = (g_config.mouse_stick == MOUSE_STICK_LEFT) ? &report[idx].lx : &report[idx].rx;
+	uint8_t *stick_y = (g_config.mouse_stick == MOUSE_STICK_LEFT) ? &report[idx].ly : &report[idx].ry;
+
+	if (mouse->delta_x != 0 || mouse->delta_y != 0) {
+		last_mouse_move_time_ms = now_ms;
+		*stick_x = clamp_stick_value(JOYSTICK_CENTER + (mouse->delta_x * g_config.mouse_sensitivity));
+		*stick_y = clamp_stick_value(JOYSTICK_CENTER + (mouse->delta_y * g_config.mouse_sensitivity));
+	} else if ((now_ms - last_mouse_move_time_ms) >= g_config.mouse_idle_timeout_ms) {
+		*stick_x = JOYSTICK_CENTER;
+		*stick_y = JOYSTICK_CENTER;
 	}
-
-	//mouse movement
-    if (mouse->delta_x != 0 || mouse->delta_y != 0) {
-        last_mouse_move_time_ms = now_ms;
-        int rx = JOYSTICK_CENTER + (mouse->delta_x * MOUSE_SENSITIVITY);
-        int ry = JOYSTICK_CENTER + (mouse->delta_y * MOUSE_SENSITIVITY);
-
-        report[idx].rx = clamp_stick_value(rx);
-        report[idx].ry = clamp_stick_value(ry);
-
-    } 
-	else 
-	{
-        if ((now_ms - last_mouse_move_time_ms) < MOUSE_IDLE_TIMEOUT_MS) {} 
-		else 
-		{
-            report[idx].rx = JOYSTICK_CENTER;
-            report[idx].ry = JOYSTICK_CENTER;
-			
-		}
-    }
-}
-
-static void
-fill_gamepad_report(int idx, uni_controller_t* ctl)
-{
-	empty_gamepad_report(&report[idx]);
-
-	//Keyboard logic
-	if (ctl->klass == UNI_CONTROLLER_CLASS_KEYBOARD) {
-
-        uni_keyboard_t* gp = &ctl->keyboard;
-		// face buttons
-		if ((gp->modifiers & UNI_KEYBOARD_MODIFIER_LEFT_SHIFT)) {
-
-			report[idx].buttons |= SWITCH_MASK_L3;
-		}
-
-		for (int i = 0; i < UNI_KEYBOARD_PRESSED_KEYS_MAX; i++) {
-
-			if (gp->pressed_keys[i] == KEY_E) {
-				report[idx].buttons |= SWITCH_MASK_Y;
-				break;
-			}
-
-			if (gp->pressed_keys[i] == KEY_R) {
-				report[idx].buttons |= SWITCH_MASK_Y;
-				break;
-			}
-
-			if (gp->pressed_keys[i] == KEY_SPACE) {
-				report[idx].buttons |= SWITCH_MASK_B;
-				break;
-			}
-
-			if (gp->pressed_keys[i] == KEY_B) {
-				report[idx].hat = SWITCH_HAT_DOWN;
-				break;
-			}
-
-			if (gp->pressed_keys[i] == KEY_Q) {
-				report[idx].buttons |= SWITCH_MASK_A;
-				break;
-			}
-
-			switch (gp->pressed_keys[i]) 
-			{
-				case KEY_W: report[idx].ly = 0x00; break;  // up
-				case KEY_S: report[idx].ly = 0xFF; break;  // down
-				case KEY_A: report[idx].lx = 0x00; break;  // left
-				case KEY_D: report[idx].lx = 0xFF; break;  // right
-			}
-
-
-		}
-	}
-
-	//Mouse logic
-    if (ctl->klass == UNI_CONTROLLER_CLASS_MOUSE) {
-
-        uni_mouse_t* mouse = &ctl->mouse;
-		absolute_time_t now = get_absolute_time();
-		uint32_t now_ms = to_ms_since_boot(now);
-
-        if (mouse->buttons & MOUSE_BUTTON_RIGHT)
-		{
-			report[idx].buttons |= SWITCH_MASK_ZL;
-		}
-
-		if (mouse->buttons & MOUSE_BUTTON_LEFT)
-		{
-			report[idx].buttons |= SWITCH_MASK_ZR;
-		}
-
-		if (mouse->scroll_wheel > 0)
-		{
-			report[idx].buttons |= SWITCH_MASK_R;
-		}
-        
-		if (mouse->scroll_wheel < 0)
-		{
-			report[idx].buttons |= SWITCH_MASK_L;
-		}
-		
-		/*
-		int rx = JOYSTICK_CENTER + (mouse->delta_x * MOUSE_SENSITIVITY);
-		int ry = JOYSTICK_CENTER + (mouse->delta_y * MOUSE_SENSITIVITY);
-
-		report[idx].rx = clamp_stick_value(rx);
-		report[idx].ry = clamp_stick_value(ry);
-		*/
-		
-		if (mouse->delta_x != 0 || mouse->delta_y != 0) {
-			last_mouse_move_time_ms = now_ms;
-
-			int rx = JOYSTICK_CENTER + (mouse->delta_x * MOUSE_SENSITIVITY);
-			int ry = JOYSTICK_CENTER + (mouse->delta_y * MOUSE_SENSITIVITY);
-
-			report[idx].rx = clamp_stick_value(rx);
-			report[idx].ry = clamp_stick_value(ry);
-		}
-		else {
-			if ((now_ms - last_mouse_move_time_ms) < MOUSE_IDLE_TIMEOUT_MS) {
-				// Keep stick at last value — don’t snap to center yet
-			} else {
-				// Reset stick to center after timeout
-				report[idx].rx = JOYSTICK_CENTER;
-				report[idx].ry = JOYSTICK_CENTER;
-			}
-		}
-            
-    }
-	/*
-	if ((gp->modifiers & KEY_W)) {
-		report[idx].buttons |= SWITCH_MASK_B;
-	}
-	
-	if ((gp->buttons & BUTTON_X)) {
-		report[idx].buttons |= SWITCH_MASK_X;
-	}
-	if ((gp->buttons & BUTTON_Y)) {
-		report[idx].buttons |= SWITCH_MASK_Y;
-	}
-
-	// shoulder buttons
-	if ((gp->buttons & BUTTON_SHOULDER_L)) {
-		report[idx].buttons |= SWITCH_MASK_L;
-	}
-	if ((gp->buttons & BUTTON_SHOULDER_R)) {
-		report[idx].buttons |= SWITCH_MASK_R;
-	}
-
-	// dpad
-	switch (gp->dpad) {
-	case DPAD_UP:
-		report[idx].hat = SWITCH_HAT_UP;
-		break;
-	case DPAD_DOWN:
-		report[idx].hat = SWITCH_HAT_DOWN;
-		break;
-	case DPAD_LEFT:
-		report[idx].hat = SWITCH_HAT_LEFT;
-		break;
-	case DPAD_RIGHT:
-		report[idx].hat = SWITCH_HAT_RIGHT;
-		break;
-	case DPAD_UP | DPAD_RIGHT:
-		report[idx].hat = SWITCH_HAT_UPRIGHT;
-		break;
-	case DPAD_DOWN | DPAD_RIGHT:
-		report[idx].hat = SWITCH_HAT_DOWNRIGHT;
-		break;
-	case DPAD_DOWN | DPAD_LEFT:
-		report[idx].hat = SWITCH_HAT_DOWNLEFT;
-		break;
-	case DPAD_UP | DPAD_LEFT:
-		report[idx].hat = SWITCH_HAT_UPLEFT;
-		break;
-	default:
-		report[idx].hat = SWITCH_HAT_NOTHING;
-		break;
-	}
-	*/
-	/*
-	// sticks
-	report[idx].lx = convert_to_switch_axis(gp->axis_x);
-	report[idx].ly = convert_to_switch_axis(gp->axis_y);
-	report[idx].rx = convert_to_switch_axis(gp->axis_rx);
-	report[idx].ry = convert_to_switch_axis(gp->axis_ry);
-	if ((gp->buttons & BUTTON_THUMB_L))
-		report[idx].buttons |= SWITCH_MASK_L3;
-	if ((gp->buttons & BUTTON_THUMB_R))
-		report[idx].buttons |= SWITCH_MASK_R3;
-
-	
-	// triggers
-	if (gp->brake)
-		report[idx].buttons |= SWITCH_MASK_ZL;
-	if (gp->throttle)
-		report[idx].buttons |= SWITCH_MASK_ZR;
-
-	// misc buttons
-	if (gp->misc_buttons & MISC_BUTTON_SYSTEM)
-		report[idx].buttons |= SWITCH_MASK_HOME;
-	if (gp->misc_buttons & MISC_BUTTON_CAPTURE)
-		report[idx].buttons |= SWITCH_MASK_CAPTURE;
-	if (gp->misc_buttons & MISC_BUTTON_BACK)
-		report[idx].buttons |= SWITCH_MASK_MINUS;
-	if (gp->misc_buttons & MISC_BUTTON_HOME)
-		report[idx].buttons |= SWITCH_MASK_PLUS;
-	*/
 }
 
 static void
@@ -441,7 +122,7 @@ set_led_status() {
 //
 // Platform Overrides
 //
-static void pico_switch_platform_init(int argc, const char** argv) 
+static void pico_switch_platform_init(int argc, const char** argv)
 {
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
@@ -449,6 +130,10 @@ static void pico_switch_platform_init(int argc, const char** argv)
     logi("my_platform: init()\n");
 
 	connected_controllers = 0;
+
+	// Load bindings from flash, falling back to built-in defaults if the
+	// stored config is missing or invalid.
+	config_load_from_flash();
 
 	uni_gamepad_mappings_t mappings = GAMEPAD_DEFAULT_MAPPINGS;
 
@@ -468,7 +153,6 @@ static void pico_switch_platform_init(int argc, const char** argv)
 	idx_r.report.rx = 0;
 	idx_r.report.ry = 0;
 	set_global_gamepad_report(&idx_r);
-
 }
 
 static void pico_switch_platform_on_init_complete(void) {
@@ -489,7 +173,6 @@ static void pico_switch_platform_on_init_complete(void) {
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
 
 	logi("BLUEPAD: ready to fill reports");
-	multicore_fifo_push_blocking(0); // signal other core to start reading
 }
 
 static void pico_switch_platform_on_device_connected(uni_hid_device_t* d) {
@@ -499,7 +182,7 @@ static void pico_switch_platform_on_device_connected(uni_hid_device_t* d) {
 static void pico_switch_platform_on_device_disconnected(uni_hid_device_t* d) {
     logi("my_platform: device disconnected: %p\n", d);
 	// NOT WORKING?
-	// This is complicated. uni_hid_device_get_idx_for_instance 
+	// This is complicated. uni_hid_device_get_idx_for_instance
 	// no longer gives us the index once the device is disconnected.
 	// We assume in this case that a device disconnecting is in a state of no gameplay
 	// so we set momentarelly all gamepad reports to 0.
@@ -528,12 +211,12 @@ static void pico_switch_platform_on_controller_data(uni_hid_device_t* d, uni_con
     CombinedControllerState* state = &combined_states[idx];
 
     // Update input state
-    if (ctl->klass == UNI_CONTROLLER_CLASS_KEYBOARD) 
+    if (ctl->klass == UNI_CONTROLLER_CLASS_KEYBOARD)
 	{
         state->has_keyboard = true;
         state->keyboard = ctl->keyboard;
-    } 
-	else if (ctl->klass == UNI_CONTROLLER_CLASS_MOUSE) 
+    }
+	else if (ctl->klass == UNI_CONTROLLER_CLASS_MOUSE)
 	{
         state->has_mouse = true;
         state->mouse = ctl->mouse;
@@ -547,7 +230,7 @@ static void pico_switch_platform_on_controller_data(uni_hid_device_t* d, uni_con
 	{
 		fill_gamepad_report_from_keyboard(idx, &state->keyboard);
 	}
-        
+
     if (state->has_mouse)
 	{
         fill_gamepad_report_from_mouse(idx, &state->mouse);
@@ -556,7 +239,6 @@ static void pico_switch_platform_on_controller_data(uni_hid_device_t* d, uni_con
     idx_r.idx = idx;
     idx_r.report = report[idx];
     set_global_gamepad_report(&idx_r);
-
 }
 
 static const uni_property_t* pico_switch_platform_get_property(uni_property_idx_t idx) {

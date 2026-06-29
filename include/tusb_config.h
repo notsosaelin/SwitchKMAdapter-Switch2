@@ -99,14 +99,21 @@ extern "C"
 #endif
 
 //------------- CLASS -------------//
+// Both classes are compiled in; only one is exposed per boot via the active
+// configuration descriptor (HID = controller mode, CDC = config mode).
 #define CFG_TUD_HID 4
-#define CFG_TUD_CDC 0
+#define CFG_TUD_CDC 1
 #define CFG_TUD_MSC 0
 #define CFG_TUD_MIDI 0
 #define CFG_TUD_VENDOR 0
 
 // HID buffer size Should be sufficient to hold ID (if any) + Data
 #define CFG_TUD_HID_EP_BUFSIZE 16
+
+// CDC FIFO + endpoint buffer sizes (config mode serial link)
+#define CFG_TUD_CDC_RX_BUFSIZE 256
+#define CFG_TUD_CDC_TX_BUFSIZE 256
+#define CFG_TUD_CDC_EP_BUFSIZE 64
 
 #ifdef __cplusplus
 }

@@ -7,6 +7,8 @@
 
 #include "sdkconfig.h"
 #include "usb.h"
+#include "usb_mode.h"
+#include "config_usb.h"
 
 // Sanity check
 #ifndef CONFIG_BLUEPAD32_PLATFORM_CUSTOM
@@ -21,11 +23,15 @@ void bluepad_core_task()
 	// initialize CYW43 driver architecture (will enable BT if/because CYW43_ENABLE_BLUETOOTH == 1)
 	if (cyw43_arch_init()) {
 		loge("failed to initialise cyw43_arch\n");
-		return -1;
+		return;
 	}
 
 	// Turn-on LED. Turn it off once init is done.
 	cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+
+	// Allow the USB core (core0) to pause this core while it reads the BOOTSEL
+	// button (which briefly takes over the QSPI bus).
+	multicore_lockout_victim_init();
 
 	// Must be called before uni_main()
 	uni_platform_set_custom(get_my_platform());
@@ -42,6 +48,17 @@ main()
 {
 	stdio_init_all();
 
+	// Pick the USB personality for this boot (controller vs config). A cold
+	// boot is always controller mode.
+	usb_mode_init_from_boot();
+
+	if (g_usb_mode == USB_MODE_CONFIG) {
+		// Config mode: single core, USB CDC only, no Bluetooth.
+		config_core_task();
+		return 0;
+	}
+
+	// Controller mode: Bluetooth on core1, USB HID controller on core0.
 	multicore_launch_core1(bluepad_core_task);
 	usb_core_task();
 

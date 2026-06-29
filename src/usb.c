@@ -11,6 +11,8 @@
 
 #include "report.h"
 #include "SwitchDescriptors.h"
+#include "bootsel_button.h"
+#include "usb_mode.h"
 
 void
 usb_core_task()
@@ -29,7 +31,7 @@ usb_core_task()
 	// send empty reports while bluepad32 is still not set
 	uint8_t runs =
 	        50;  // run for at least 5 seconds sending empty reports, garanteeing host will see the device
-	while (multicore_fifo_get_status() & 1 == 0 || runs > 0) {
+	while (runs > 0) {
 		if (tud_hid_n_ready(r.idx)) {
 			tud_hid_n_report(r.idx, 0, &r.report, sizeof(r.report));
 		}
@@ -41,6 +43,19 @@ usb_core_task()
 		get_global_gamepad_report(&r);
 
 		tud_task();
+
+		// Triple-click BOOTSEL -> reboot into config mode. The read briefly
+		// takes over the QSPI bus, so lock out the BT core (core1) during it.
+		static uint32_t last_bootsel_ms = 0;
+		uint32_t now = to_ms_since_boot(get_absolute_time());
+		if (now - last_bootsel_ms >= 50) {
+			last_bootsel_ms = now;
+			if (bootsel_triple_click_poll(true)) {
+				bootsel_wait_for_release(true);
+				usb_mode_reboot_to(USB_MODE_CONFIG);
+			}
+		}
+
 		if (tud_suspended()) {
 			tud_remote_wakeup();
 			continue;
